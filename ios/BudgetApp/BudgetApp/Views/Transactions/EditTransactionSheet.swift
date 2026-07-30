@@ -68,7 +68,7 @@ struct EditTransactionSheet: View {
                             .keyboardType(.decimalPad)
                     }
 
-                    TextField("Description", text: $editedDescription)
+                    TextField("Description (optional)", text: $editedDescription)
 
                     TextField("Merchant (optional)", text: $editedMerchant)
 
@@ -206,7 +206,7 @@ struct EditTransactionSheet: View {
                     Button("Save") {
                         saveTransaction()
                     }
-                    .disabled(editedAmount.isEmpty || editedDescription.isEmpty || isSaving)
+                    .disabled(editedAmount.isEmpty || isSaving)
                 }
             }
             .task {

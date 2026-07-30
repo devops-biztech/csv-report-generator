@@ -84,6 +84,8 @@ export const linkedAccounts = pgTable('linked_accounts', {
   syncStartDate: text('sync_start_date'), // YYYY-MM-DD, set when sync first enabled
   lastSyncedAt: timestamp('last_synced_at', { withTimezone: true }), // last sync attempt (lazy-sync claim bumps this even on failure)
   lastSuccessfulSyncAt: timestamp('last_successful_sync_at', { withTimezone: true }), // only set when a sync completes
+  balanceCached: text('balance_cached'), // last live balance from the provider (decimal string); served without a fresh call while fresh
+  balanceFetchedAt: timestamp('balance_fetched_at', { withTimezone: true }), // when balanceCached was last refreshed; gates the 6h balance staleness window
   createdAt: timestamp('created_at', { withTimezone: true }).$defaultFn(() => new Date()),
 });
 
