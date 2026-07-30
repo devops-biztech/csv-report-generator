@@ -208,9 +208,10 @@ export async function syncSimplefinAccounts(
   return results;
 }
 
-// Lazy hourly sync — SimpleFIN only refreshes bank data ~once/24h and caps
-// usage at ~24 requests/day, so polling more than hourly is pure waste.
-export const SYNC_STALENESS_MS = 60 * 60 * 1000;
+// Lazy sync interval — SimpleFIN only refreshes bank data ~once/24h and caps
+// usage at ~24 requests/day, so polling more often is pure waste. Set to 4h to
+// keep SimpleFIN access (and its rotating-IP "new IP" security emails) minimal.
+export const SYNC_STALENESS_MS = 4 * 60 * 60 * 1000;
 
 // Sync the user's accounts if they haven't synced in the last hour.
 // The claim (bumping lastSyncedAt up front, filtered on the old value) is
