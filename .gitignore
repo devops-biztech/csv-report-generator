@@ -44,10 +44,14 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 
-# database
-budget.db
-budget.db-shm
-budget.db-wal
+# generated demo CSVs — recreated by `npm run db:seed`
+sample-data/
+
+# database (SQLite lives in data/, recreated by `npm run db:init`)
+data/
+*.db
+*.db-shm
+*.db-wal
 drizzle/
 
 # Claude Code

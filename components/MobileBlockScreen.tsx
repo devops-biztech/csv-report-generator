@@ -4,7 +4,7 @@ import { Monitor } from "lucide-react";
 
 export default function MobileBlockScreen() {
   return (
-    <div className="md:hidden fixed inset-0 z-50 bg-surface-primary flex items-center justify-center p-8">
+    <div className="md:hidden fixed inset-0 z-50 bg-surface-secondary flex items-center justify-center p-8">
       <div className="text-center max-w-sm">
         <div className="w-16 h-16 bg-primary-light rounded-full flex items-center justify-center mx-auto mb-6">
           <Monitor size={24} className="text-primary" />

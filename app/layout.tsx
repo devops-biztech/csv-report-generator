@@ -1,18 +1,23 @@
 import type { Metadata } from "next";
-import { Outfit } from "next/font/google";
-import { ClerkProvider } from "@clerk/nextjs";
+import { Archivo, Bevan } from "next/font/google";
 import { ToastProvider } from "@/contexts/ToastContext";
-import { UncategorizedCountProvider } from "@/contexts/UncategorizedCountContext";
 import "./globals.css";
 
-const outfit = Outfit({
-  variable: "--font-outfit",
+// Matches the company site: Archivo for text, Bevan for the slab-serif display face.
+const archivo = Archivo({
+  variable: "--font-archivo",
+  subsets: ["latin"],
+});
+
+const bevan = Bevan({
+  variable: "--font-bevan",
+  weight: "400",
   subsets: ["latin"],
 });
 
 export const metadata: Metadata = {
-  title: "Budget App",
-  description: "Zero-based budget tracking application",
+  title: "Data Reporting",
+  description: "Consolidated CSV-driven financial reporting across locations",
 };
 
 export default function RootLayout({
@@ -21,18 +26,14 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <ClerkProvider>
-      <html lang="en" className="overflow-hidden">
-        <body
-          className={`${outfit.variable} antialiased hide-scrollbar overflow-hidden`}
-        >
-          <ToastProvider>
-            <UncategorizedCountProvider>
-              {children}
-            </UncategorizedCountProvider>
-          </ToastProvider>
-        </body>
-      </html>
-    </ClerkProvider>
+    <html lang="en" className="overflow-hidden">
+      <body
+        className={`${archivo.variable} ${bevan.variable} antialiased hide-scrollbar overflow-hidden`}
+      >
+        <ToastProvider>
+          {children}
+        </ToastProvider>
+      </body>
+    </html>
   );
 }

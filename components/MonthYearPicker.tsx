@@ -54,7 +54,7 @@ export default function MonthYearPicker({ month, year, onSelect, className }: Mo
               onClick={() => onSelect(i, pickerYear)}
               className={`py-2 px-1 rounded-lg text-sm font-medium transition-colors ${
                 isSelected
-                  ? 'bg-primary text-white'
+                  ? 'bg-primary text-ink'
                   : isCurrent
                     ? 'bg-primary-light text-primary font-semibold'
                     : 'text-text-primary hover:bg-surface-secondary'

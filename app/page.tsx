@@ -1,751 +1,331 @@
-"use client";
+'use client';
 
-import { useState, useEffect, useCallback, Suspense } from "react";
-import { useSearchParams, useRouter } from "next/navigation";
-import BudgetHeader from "@/components/BudgetHeader";
-import BufferSection from "@/components/BufferSection";
-import BudgetSection from "@/components/BudgetSection";
-import BudgetSummary from "@/components/BudgetSummary";
-import AddTransactionModal, { TransactionToEdit, CategoryOption } from "@/components/AddTransactionModal";
-import MonthlyReportModal from "@/components/MonthlyReportModal";
-import DashboardLayout from "@/components/DashboardLayout";
-import { Budget, Transaction, BudgetItem, DEFAULT_CATEGORIES } from "@/types/budget";
-import { transformDbBudgetToAppBudget } from "@/lib/budgetHelpers";
-import { PanelRight, Search, X } from "lucide-react";
-import Modal from "@/components/ui/Modal";
-import Button from "@/components/ui/Button";
-import Input from "@/components/ui/Input";
-import Card from "@/components/ui/Card";
-import Skeleton from "@/components/ui/Skeleton";
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import Link from 'next/link';
+import { Upload } from 'lucide-react';
+import DashboardLayout from '@/components/DashboardLayout';
+import StatTile from '@/components/StatTile';
+import TrendChart, { type TrendSeries } from '@/components/charts/TrendChart';
+import BarRows from '@/components/charts/BarRows';
+import Card from '@/components/ui/Card';
+import Select from '@/components/ui/Select';
+import Skeleton from '@/components/ui/Skeleton';
+import { formatCents, formatCentsCompact } from '@/lib/money';
+import { entityColor, MAGNITUDE_FILL } from '@/lib/palette';
 
-const EMOJI_GROUPS: { label: string; emojis: string[] }[] = [
-  { label: 'Finance', emojis: ['💰', '💵', '💳', '🏦', '💎', '🪙', '📈', '📉', '💸', '🧾', '🏧'] },
-  { label: 'Home', emojis: ['🏠', '🏡', '🛋️', '🛏️', '🧹', '🔑', '🪴', '🕯️', '🧺', '🪣', '🧽'] },
-  { label: 'Transport', emojis: ['🚗', '🚕', '🚌', '🚲', '✈️', '⛽', '🚇', '🛵', '🚁', '⛵', '🛻'] },
-  { label: 'Food & Drink', emojis: ['🍽️', '🍕', '🍔', '🥗', '☕', '🍷', '🛒', '🧁', '🍣', '🥡', '🍺'] },
-  { label: 'Health', emojis: ['🏥', '💊', '🩺', '🏋️', '🧘', '🧠', '❤️', '🦷', '👁️', '🩹', '💉'] },
-  { label: 'Education', emojis: ['📚', '🎓', '✏️', '📝', '🔬', '💻', '📐', '🎒', '📖', '🧪', '🏫'] },
-  { label: 'Kids & Pets', emojis: ['👶', '🧸', '🐾', '🐶', '🐱', '🎠', '🍼', '🧩', '🪁', '🐠', '🐴'] },
-  { label: 'Fun & Hobbies', emojis: ['🎮', '🎵', '🎨', '🎸', '⚽', '🎯', '🎲', '📱', '🎬', '📸', '🎤'] },
-  { label: 'Giving', emojis: ['🤲', '🎁', '💝', '🙏', '⛪', '🕊️', '🌍', '🎗️', '🤝', '❤️‍🔥', '🫶'] },
-  { label: 'Travel', emojis: ['🏖️', '🗺️', '🧳', '🏔️', '🌴', '🗼', '🎢', '🏕️', '🌅', '🚀', '🛳️'] },
-  { label: 'Work', emojis: ['💼', '🛠️', '📋', '📊', '🖥️', '📧', '🏢', '📎', '🗂️', '💡', '⚙️'] },
-  { label: 'Nature', emojis: ['🌱', '🌻', '🌳', '🍂', '🌊', '☀️', '🌙', '⭐', '🔥', '❄️', '🌈'] },
-];
-
-interface LinkedAccount {
-  id: number;
-  accountName: string;
-  institutionName: string;
-  lastFour: string;
-  accountSubtype: string;
+interface ReportData {
+  empty: boolean;
+  range: { from: string; to: string };
+  totals: { revenueCents: number; expenseCents: number; netCents: number; transactionCount: number };
+  byLocation: { locationId: number; name: string; code: string; revenueCents: number; expenseCents: number; netCents: number; transactionCount: number }[];
+  byPeriod: { period: string; revenueCents: number; expenseCents: number; netCents: number }[];
+  byPeriodLocation: { period: string; locationId: number; revenueCents: number; expenseCents: number; netCents: number }[];
+  byCategory: { category: string; type: 'revenue' | 'expense'; amountCents: number; transactionCount: number }[];
+  locations: { id: number; name: string; code: string }[];
+  availablePeriods: string[];
 }
 
-interface SelectedBudgetItem {
-  item: BudgetItem;
-  categoryName: string;
-}
+type Measure = 'netCents' | 'revenueCents' | 'expenseCents';
 
-export default function HomeWrapper() {
-  return (
-    <Suspense>
-      <Home />
-    </Suspense>
-  );
-}
+const MEASURE_LABEL: Record<Measure, string> = {
+  revenueCents: 'Revenue',
+  netCents: 'Net',
+  expenseCents: 'Expenses',
+};
 
-function Home() {
-  const searchParams = useSearchParams();
-  const router = useRouter();
-  const currentDate = new Date();
-  const [month, setMonth] = useState(() => {
-    const p = searchParams.get('month');
-    return p !== null ? parseInt(p) : currentDate.getMonth();
-  });
-  const [year, setYear] = useState(() => {
-    const p = searchParams.get('year');
-    return p !== null ? parseInt(p) : currentDate.getFullYear();
-  });
-  const [budget, setBudget] = useState<Budget | null>(null);
+export default function ReportsPage() {
+  const [data, setData] = useState<ReportData | null>(null);
   const [loading, setLoading] = useState(true);
-  const [checkingOnboarding, setCheckingOnboarding] = useState(true);
-  const [refreshTrigger, setRefreshTrigger] = useState(0);
+  const [from, setFrom] = useState('');
+  const [to, setTo] = useState('');
+  const [locationId, setLocationId] = useState('all');
+  const [measure, setMeasure] = useState<Measure>('netCents');
 
-  // Check if user needs onboarding
-  useEffect(() => {
-    async function checkOnboarding() {
-      try {
-        const res = await fetch('/api/onboarding');
-        const { completed } = await res.json();
-        if (!completed) {
-          window.location.href = '/onboarding';
-          return;
-        }
-      } catch {
-        // If onboarding check fails, proceed to dashboard
-      }
-      setCheckingOnboarding(false);
-    }
-    checkOnboarding();
-  }, []);
-  const [isEditModalOpen, setIsEditModalOpen] = useState(false);
-  const [transactionToEdit, setTransactionToEdit] = useState<TransactionToEdit | null>(null);
-  const [linkedAccounts, setLinkedAccounts] = useState<LinkedAccount[]>([]);
-  const [isReportModalOpen, setIsReportModalOpen] = useState(false);
-  const [selectedBudgetItem, setSelectedBudgetItem] = useState<SelectedBudgetItem | null>(null);
-  const [splitToEdit, setSplitToEdit] = useState<string | null>(null);
-  const [isSummaryOpen, setIsSummaryOpen] = useState(false);
-  const [isAddGroupOpen, setIsAddGroupOpen] = useState(false);
-  const [newGroupName, setNewGroupName] = useState('');
-  const [newGroupEmoji, setNewGroupEmoji] = useState('📋');
-  const [emojiSearch, setEmojiSearch] = useState('');
-  const [isResetBudgetOpen, setIsResetBudgetOpen] = useState(false);
-  const [isResetting, setIsResetting] = useState(false);
-  const [resetMode, setResetMode] = useState<'zero' | 'replace' | null>(null);
+  const load = useCallback(async () => {
+    const params = new URLSearchParams();
+    if (from) params.set('from', from);
+    if (to) params.set('to', to);
+    if (locationId !== 'all') params.set('locationId', locationId);
+    const res = await fetch(`/api/reports?${params}`);
+    const json: ReportData = await res.json();
+    setData(json);
+    if (!from && json.range.from) setFrom(json.range.from);
+    if (!to && json.range.to) setTo(json.range.to);
+    setLoading(false);
+  }, [from, to, locationId]);
 
-  const handleSplitClick = (parentTransactionId: string) => {
-    setSplitToEdit(parentTransactionId);
-  };
+  useEffect(() => { load(); }, [load]);
 
-  const clearSplitToEdit = () => {
-    setSplitToEdit(null);
-  };
+  const periods = useMemo(() => data?.byPeriod.map(p => p.period) ?? [], [data]);
 
-  const fetchLinkedAccounts = useCallback(async () => {
-    try {
-      const response = await fetch('/api/bank/accounts');
-      if (response.ok) {
-        const data = await response.json();
-        setLinkedAccounts(data);
-      }
-    } catch (error) {
-      console.error('Error fetching linked accounts:', error);
-    }
-  }, []);
+  // One line per location, each keeping its own colour as filters change.
+  const series = useMemo<TrendSeries[]>(() => {
+    if (!data) return [];
+    const order = data.locations.map(l => l.id);
+    const shown = locationId === 'all' ? data.locations : data.locations.filter(l => String(l.id) === locationId);
 
-  useEffect(() => {
-    fetchLinkedAccounts();
-  }, [fetchLinkedAccounts]);
-
-  const fetchBudget = async (m: number, y: number, showLoading = true) => {
-    if (showLoading) {
-      setLoading(true);
-    }
-    try {
-      const response = await fetch(`/api/budgets?month=${m}&year=${y}`);
-      const data = await response.json();
-      const transformedBudget = transformDbBudgetToAppBudget(data);
-      setBudget(transformedBudget);
-    } catch (error) {
-      console.error("Error fetching budget:", error);
-    } finally {
-      if (showLoading) {
-        setLoading(false);
-      }
-    }
-  };
-
-  useEffect(() => {
-    fetchBudget(month, year);
-  }, [month, year]);
-
-  const handleMonthChange = (newMonth: number, newYear: number) => {
-    setMonth(newMonth);
-    setYear(newYear);
-    router.push(`/?month=${newMonth}&year=${newYear}`, { scroll: false });
-  };
-
-  const refreshBudget = () => {
-    fetchBudget(month, year, false);
-  };
-
-  // Get all budget items for the dropdown
-  const getAllBudgetItems = (): { category: string; items: BudgetItem[] }[] => {
-    if (!budget) return [];
-    const categories = Object.entries(budget.categories).map(([, category]) => ({
-      category: category.name,
-      items: category.items,
+    return shown.map(loc => ({
+      id: String(loc.id),
+      name: loc.name,
+      color: entityColor(order.indexOf(loc.id)),
+      values: periods.map(p => {
+        const row = data.byPeriodLocation.find(r => r.period === p && r.locationId === loc.id);
+        return row ? row[measure] : 0;
+      }),
     }));
-    return categories.filter(c => c.items.length > 0);
-  };
+  }, [data, periods, measure, locationId]);
 
-  // Get category options for tag picker
-  const getCategoryOptions = (): CategoryOption[] => {
-    if (!budget) return [];
-    return Object.entries(budget.categories).map(([key, category]) => ({
-      key,
-      name: category.name,
-      emoji: category.emoji,
-    }));
-  };
+  const expenseCategories = useMemo(
+    () => (data?.byCategory ?? []).filter(c => c.type === 'expense').sort((a, b) => b.amountCents - a.amountCents),
+    [data]
+  );
+  const revenueCategories = useMemo(
+    () => (data?.byCategory ?? []).filter(c => c.type === 'revenue').sort((a, b) => b.amountCents - a.amountCents),
+    [data]
+  );
 
-  // Handle clicking on a budget item to show details in sidebar
-  const handleItemClick = (item: BudgetItem, categoryName: string) => {
-    setSelectedBudgetItem({ item, categoryName });
-  };
+  const margin = data && data.totals.revenueCents > 0
+    ? (data.totals.netCents / data.totals.revenueCents) * 100
+    : 0;
 
-  // Handle clicking on a transaction to edit it
-  const handleTransactionClick = (transaction: Transaction) => {
-    setTransactionToEdit({
-      id: parseInt(transaction.id),
-      budgetItemId: transaction.budgetItemId ? parseInt(transaction.budgetItemId) : null,
-      linkedAccountId: transaction.linkedAccountId,
-      date: transaction.date,
-      description: transaction.description,
-      amount: transaction.amount,
-      type: transaction.type,
-      merchant: transaction.merchant,
-      tagCategoryType: transaction.tagCategoryType,
-      isNonEarned: transaction.isNonEarned,
-    });
-    setIsEditModalOpen(true);
-  };
-
-  const handleEditTransaction = async (transaction: {
-    id: number;
-    budgetItemId: string;
-    linkedAccountId?: number;
-    date: string;
-    description: string;
-    amount: number;
-    type: 'income' | 'expense';
-    merchant?: string;
-    tagCategoryType?: string;
-    isNonEarned?: boolean;
-  }) => {
-    try {
-      const response = await fetch('/api/transactions', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(transaction),
-      });
-
-      if (response.ok) {
-        setTransactionToEdit(null);
-        setIsEditModalOpen(false);
-        refreshBudget();
-      }
-    } catch (error) {
-      console.error('Error editing transaction:', error);
-    }
-  };
-
-  const handleDeleteFromModal = async (id: number) => {
-    try {
-      const response = await fetch(`/api/transactions?id=${id}`, {
-        method: 'DELETE',
-      });
-
-      if (response.ok) {
-        setTransactionToEdit(null);
-        setIsEditModalOpen(false);
-        refreshBudget();
-      }
-    } catch (error) {
-      console.error('Error deleting transaction:', error);
-    }
-  };
-
-  const closeEditModal = () => {
-    setIsEditModalOpen(false);
-    setTransactionToEdit(null);
-  };
-
-  const handleTransactionDrop = async (transactionId: string, budgetItemId: string) => {
-    try {
-      const response = await fetch('/api/transactions', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: parseInt(transactionId), budgetItemId }),
-      });
-      if (response.ok) {
-        refreshBudget();
-        setRefreshTrigger(prev => prev + 1);
-      }
-    } catch (error) {
-      console.error('Error assigning transaction:', error);
-    }
-  };
-
-  const handleAddGroup = async () => {
-    if (!newGroupName.trim() || !budget?.id) return;
-    try {
-      const response = await fetch('/api/budget-categories', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          budgetId: budget.id,
-          name: newGroupName.trim(),
-          emoji: newGroupEmoji,
-        }),
-      });
-      if (response.ok) {
-        setIsAddGroupOpen(false);
-        setNewGroupName('');
-        setNewGroupEmoji('📋');
-        refreshBudget();
-      } else {
-        const err = await response.json();
-        alert(err.error || 'Failed to create category');
-      }
-    } catch (error) {
-      console.error('Error creating category:', error);
-    }
-  };
-
-  const handleDeleteCategory = async (dbId: number) => {
-    if (!confirm('Delete this category? All its items and transactions will be removed.')) return;
-    try {
-      const response = await fetch(`/api/budget-categories?id=${dbId}`, { method: 'DELETE' });
-      if (response.ok) {
-        refreshBudget();
-      }
-    } catch (error) {
-      console.error('Error deleting category:', error);
-    }
-  };
-
-  if (checkingOnboarding || loading || !budget) {
+  if (loading) {
     return (
       <DashboardLayout>
-        <div className="h-full flex overflow-hidden">
-          <div className="flex-1 overflow-y-auto hide-scrollbar">
-            {/* Header skeleton */}
-            <div className="px-4 sm:px-6 lg:px-8 pt-8">
-              <div className="border-b border-border p-6">
-                <div className="flex items-center justify-between">
-                  <div className="space-y-2">
-                    <Skeleton className="h-9 w-56" />
-                    <Skeleton className="h-5 w-40" />
-                  </div>
-                  <Skeleton className="h-10 w-24 rounded-lg" />
-                </div>
-              </div>
-            </div>
-            {/* Budget cards skeleton */}
-            <div className="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-6">
-              <Card className="px-6 py-4 flex items-center justify-between">
-                <Skeleton className="h-6 w-64" />
-                <Skeleton className="h-8 w-36 rounded-lg" />
-              </Card>
-              {[0, 1, 2].map((i) => (
-                <Card key={i} className="overflow-hidden">
-                  <div className="border-b border-border px-6 py-4 flex items-center justify-between">
-                    <Skeleton className="h-6 w-40" />
-                    <div className="flex gap-6">
-                      <Skeleton className="h-6 w-20" />
-                      <Skeleton className="h-6 w-20" />
-                    </div>
-                  </div>
-                  <div className="p-6 space-y-4">
-                    {[0, 1, 2].map((j) => (
-                      <div key={j} className="flex items-center gap-4">
-                        <Skeleton className="h-5 flex-1" />
-                        <Skeleton className="h-5 w-20" />
-                        <Skeleton className="h-5 w-20" />
-                      </div>
-                    ))}
-                  </div>
-                </Card>
-              ))}
-            </div>
+        <div className="p-6 space-y-4">
+          <Skeleton className="h-10 w-72" />
+          <div className="grid grid-cols-4 gap-4">
+            {[0, 1, 2, 3].map(i => <Skeleton key={i} className="h-24" />)}
           </div>
-          {/* Summary sidebar skeleton */}
-          <div className="hidden lg:block w-xl bg-surface-secondary p-8">
-            <Card className="h-full p-8 space-y-8">
-              <div className="flex justify-center gap-12">
-                <Skeleton className="h-14 w-14 rounded-full" />
-                <Skeleton className="h-14 w-14 rounded-full" />
-              </div>
-              <div className="space-y-4">
-                {[0, 1, 2, 3, 4].map((i) => (
-                  <div key={i} className="flex justify-between">
-                    <Skeleton className="h-5 w-32" />
-                    <Skeleton className="h-5 w-20" />
-                  </div>
-                ))}
-              </div>
-            </Card>
-          </div>
+          <Skeleton className="h-80" />
         </div>
       </DashboardLayout>
     );
   }
 
-  // Check if the budget is empty (no items in any category)
-  const hasAnyItems = Object.values(budget.categories).some(
-    (category) => category.items.length > 0
-  );
-
-  // Get month name helper
-  const getMonthName = (monthIndex: number) => {
-    const months = ['January', 'February', 'March', 'April', 'May', 'June',
-      'July', 'August', 'September', 'October', 'November', 'December'];
-    return months[monthIndex];
-  };
-
-  // Get previous month name
-  const getPreviousMonthName = (monthIndex: number) => {
-    const prevMonth = monthIndex === 0 ? 11 : monthIndex - 1;
-    return getMonthName(prevMonth);
-  };
-
-  // Handle copying from previous month
-  const handleCopyFromPreviousMonth = async () => {
-    const prevMonth = month === 0 ? 11 : month - 1;
-    const prevYear = month === 0 ? year - 1 : year;
-
-    try {
-      const response = await fetch('/api/budgets/copy', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          sourceMonth: prevMonth,
-          sourceYear: prevYear,
-          targetMonth: month,
-          targetYear: year,
-        }),
-      });
-
-      if (response.ok) {
-        refreshBudget();
-      } else {
-        console.error('Error copying budget');
-      }
-    } catch (error) {
-      console.error('Error copying budget:', error);
-    }
-  };
-
-  // If no items exist, show empty state
-  if (!hasAnyItems) {
+  if (!data || data.empty) {
     return (
       <DashboardLayout>
-        <div className="h-full flex overflow-hidden">
-          {/* Main content area */}
-          <div className="flex-1 overflow-y-auto hide-scrollbar">
-            {/* Header - stretched wider */}
-            <div className="px-4 sm:px-6 lg:px-8 pt-8">
-              <BudgetHeader
-                month={budget.month}
-                year={budget.year}
-                remainingToBudget={0}
-                onMonthChange={handleMonthChange}
-              />
-            </div>
-
-            {/* Empty state content */}
-            <div className="mt-8 text-center">
-                {/* Illustration */}
-                <div className="flex items-center justify-center mb-8">
-                  <img
-                    src="/clone-budget.svg"
-                    alt="Copy budget illustration"
-                    className="w-80 h-80 opacity-60"
-                  />
-                </div>
-
-                {/* Heading */}
-                <h2 className="text-2xl font-semibold text-text-primary mb-3">
-                  Hey there, looks like you need a budget for {getMonthName(budget.month)}.
-                </h2>
-
-                {/* Subtext */}
-                <p className="text-text-secondary mb-6">
-                  We&apos;ll <span className="font-semibold">copy {getPreviousMonthName(budget.month)}&apos;s budget</span> to get you started.
-                </p>
-
-                {/* CTA Button */}
-                <button
-                  onClick={handleCopyFromPreviousMonth}
-                  className="px-8 py-3 bg-primary text-white font-medium rounded-lg hover:bg-primary-hover transition-colors"
-                >
-                  Start Planning for {getMonthName(budget.month)}
-                </button>
-            </div>
-          </div>
-
-          {/* Right sidebar placeholder */}
-          <div className="hidden lg:block w-xl bg-surface-secondary p-8"></div>
+        <div className="flex h-full items-center justify-center p-6">
+          <Card className="max-w-md p-8 text-center">
+            <Upload className="mx-auto mb-3 text-text-tertiary" size={32} />
+            <h2 className="font-display text-lg text-text-primary">No data yet</h2>
+            <p className="mt-1.5 text-sm text-text-secondary">
+              Import a CSV to start building consolidated reports across your locations.
+            </p>
+            <Link
+              href="/import"
+              className="mt-4 inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-ink hover:bg-primary-hover"
+            >
+              <Upload size={16} /> Import CSV
+            </Link>
+          </Card>
         </div>
       </DashboardLayout>
     );
   }
 
-  // Calculate remaining to budget
-  const totalPlannedIncome = budget.categories.income.items.reduce(
-    (sum, item) => sum + item.planned,
-    0
-  );
-  const totalPlannedExpenses = Object.entries(budget.categories)
-    .filter(([key]) => key !== 'income')
-    .reduce((sum, [, category]) => {
-      return sum + category.items.reduce((catSum, item) => catSum + item.planned, 0);
-    }, 0);
-  const totalAvailable = (budget.buffer || 0) + totalPlannedIncome;
-  const remainingToBudget = totalAvailable - totalPlannedExpenses;
+  const scopeLabel = locationId === 'all'
+    ? `All ${data.locations.length} locations`
+    : data.locations.find(l => String(l.id) === locationId)?.name ?? '';
 
   return (
     <DashboardLayout>
-      <div className="h-full flex overflow-hidden">
-        {/* Main content area */}
-        <div className="flex-1 overflow-y-auto hide-scrollbar">
-          {/* Header - stretched wider */}
-          <div className="px-4 sm:px-6 lg:px-8 pt-8">
-            <BudgetHeader
-              month={budget.month}
-              year={budget.year}
-              remainingToBudget={remainingToBudget}
-              onMonthChange={handleMonthChange}
-              onResetBudget={() => setIsResetBudgetOpen(true)}
-            />
+      <div className="h-full overflow-y-auto p-6 space-y-5">
+        {/* Header + filters, all in one row above the charts */}
+        <div className="flex flex-wrap items-end justify-between gap-4">
+          <div>
+            <h1 className="font-display text-2xl text-text-primary">Consolidated Reports</h1>
+            <p className="text-sm text-text-secondary">
+              {scopeLabel} · {data.range.from} to {data.range.to} · {data.totals.transactionCount.toLocaleString()} transactions
+            </p>
           </div>
-
-          {/* Budget content - constrained width */}
-          <div className="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-            <div className="space-y-6 pb-8">
-              <BufferSection
-                budgetId={budget.id}
-                buffer={budget.buffer}
-                onRefresh={refreshBudget}
-              />
-
-              {/* Render categories dynamically: income first, then defaults, then custom, saving last */}
-              {(() => {
-                const entries = Object.entries(budget.categories);
-                const income = entries.find(([key]) => key === 'income');
-                const saving = entries.find(([key]) => key === 'saving');
-                const defaults = entries.filter(([key]) => key !== 'income' && key !== 'saving' && DEFAULT_CATEGORIES.includes(key as any));
-                const custom = entries.filter(([key]) => !DEFAULT_CATEGORIES.includes(key as any));
-                const ordered = [
-                  ...(income ? [income] : []),
-                  ...defaults,
-                  ...custom,
-                  ...(saving ? [saving] : []),
-                ];
-                return ordered.map(([key, category]) => (
-                  <div key={key} className="relative group">
-                    <BudgetSection
-                      category={category}
-                      onRefresh={refreshBudget}
-                      onTransactionClick={handleTransactionClick}
-                      onSplitClick={handleSplitClick}
-                      onItemClick={handleItemClick}
-                      selectedItemId={selectedBudgetItem?.item.id}
-                      onTransactionDrop={handleTransactionDrop}
-                    />
-                    {/* Delete button for custom categories */}
-                    {!DEFAULT_CATEGORIES.includes(key as any) && category.dbId && (
-                      <button
-                        onClick={() => handleDeleteCategory(category.dbId!)}
-                        className="absolute top-3 right-3 opacity-0 group-hover:opacity-100 p-1.5 text-danger hover:bg-danger-light rounded transition-opacity"
-                        title="Delete category"
-                      >
-                        <X size={12} />
-                      </button>
-                    )}
-                  </div>
-                ));
-              })()}
-
-              {/* Add Group Button */}
-              <button
-                onClick={() => setIsAddGroupOpen(true)}
-                className="w-full py-3 border-2 border-dotted border-border-strong rounded-lg text-text-secondary hover:border-primary hover:text-primary transition-colors cursor-pointer"
-              >
-                + Add Group
-              </button>
-
-              {/* Reset Budget Modal */}
-              <Modal
-                isOpen={isResetBudgetOpen}
-                onClose={() => { setIsResetBudgetOpen(false); setResetMode(null); }}
-                title="How would you like to reset your budget?"
-                size="md"
-              >
-                    {!resetMode ? (
-                      <div className="space-y-3">
-                        <button
-                          onClick={() => setResetMode('zero')}
-                          className="w-full p-4 border border-border-strong rounded-lg hover:bg-surface-secondary transition-colors text-left"
-                        >
-                          <div className="font-medium text-text-primary">Zero out all planned amounts</div>
-                          <div className="text-sm text-text-secondary mt-1">Keep your categories and items, but set all planned amounts to $0.00</div>
-                        </button>
-
-                        <button
-                          onClick={() => setResetMode('replace')}
-                          className="w-full p-4 border border-border-strong rounded-lg hover:bg-surface-secondary transition-colors text-left"
-                        >
-                          <div className="font-medium text-text-primary">Replace with last month&apos;s budget</div>
-                          <div className="text-sm text-text-secondary mt-1">Delete current items and copy everything from {getPreviousMonthName(budget.month)}</div>
-                        </button>
-                      </div>
-                    ) : (
-                      <div className="space-y-4">
-                        <p className="text-text-secondary">
-                          {resetMode === 'zero'
-                            ? 'This will set all planned amounts to $0.00. Your categories, items, and transactions will be kept.'
-                            : `This will delete all current items and replace them with ${getPreviousMonthName(budget.month)}'s budget. Transactions will be kept.`}
-                        </p>
-                        <div className="flex gap-3">
-                          <Button
-                            variant="secondary"
-                            onClick={() => setResetMode(null)}
-                            disabled={isResetting}
-                            className="flex-1"
-                          >
-                            Back
-                          </Button>
-                          <Button
-                            variant="danger"
-                            disabled={isResetting}
-                            onClick={async () => {
-                              setIsResetting(true);
-                              try {
-                                const res = await fetch('/api/budgets/reset', {
-                                  method: 'POST',
-                                  headers: { 'Content-Type': 'application/json' },
-                                  body: JSON.stringify({ budgetId: budget.id, mode: resetMode }),
-                                });
-                                if (res.ok) { refreshBudget(); setIsResetBudgetOpen(false); setResetMode(null); }
-                              } catch (e) { console.error('Reset error:', e); }
-                              setIsResetting(false);
-                            }}
-                            className="flex-1"
-                          >
-                            {isResetting ? 'Resetting...' : 'Confirm Reset'}
-                          </Button>
-                        </div>
-                      </div>
-                    )}
-              </Modal>
-
-              {/* Add Group Modal */}
-              <Modal
-                isOpen={isAddGroupOpen}
-                onClose={() => { setIsAddGroupOpen(false); setNewGroupName(''); setNewGroupEmoji('📋'); }}
-                title="New Category"
-                size="md"
-              >
-                    <div className="space-y-4">
-                      <div>
-                        <label className="block text-sm font-medium text-text-secondary mb-1">Name</label>
-                        <Input
-                          type="text"
-                          value={newGroupName}
-                          onChange={(e) => setNewGroupName(e.target.value)}
-                          placeholder="e.g. Pet Care"
-                          className="text-sm"
-                          autoFocus
-                          onKeyDown={(e) => { if (e.key === 'Enter') handleAddGroup(); }}
-                        />
-                      </div>
-
-                      <div>
-                        <label className="block text-sm font-medium text-text-secondary mb-2">Emoji</label>
-                        <div className="relative mb-2">
-                          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 text-text-tertiary" size={12} />
-                          <input
-                            type="text"
-                            value={emojiSearch}
-                            onChange={(e) => setEmojiSearch(e.target.value)}
-                            placeholder="Search (e.g. home, food)"
-                            className="w-full border border-border rounded-lg pl-7 pr-3 py-1.5 text-sm focus:ring-2 focus:ring-primary focus:border-primary"
-                          />
-                        </div>
-                        <div className="max-h-48 overflow-y-auto space-y-2">
-                          {EMOJI_GROUPS
-                            .filter((g) => !emojiSearch || g.label.toLowerCase().includes(emojiSearch.toLowerCase()))
-                            .map((group) => (
-                              <div key={group.label}>
-                                <div className="text-xs text-text-tertiary mb-1">{group.label}</div>
-                                <div className="flex flex-wrap gap-0.5">
-                                  {group.emojis.map((emoji) => (
-                                    <button
-                                      key={emoji}
-                                      onClick={() => setNewGroupEmoji(emoji)}
-                                      className={`w-7 h-7 flex items-center justify-center rounded text-base hover:bg-surface-secondary transition-colors ${
-                                        newGroupEmoji === emoji ? 'bg-primary-light ring-2 ring-primary' : ''
-                                      }`}
-                                    >
-                                      {emoji}
-                                    </button>
-                                  ))}
-                                </div>
-                              </div>
-                            ))}
-                        </div>
-                      </div>
-
-                      <Button
-                        onClick={handleAddGroup}
-                        disabled={!newGroupName.trim()}
-                        className="w-full"
-                      >
-                        Create Category
-                      </Button>
-                    </div>
-              </Modal>
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="w-44">
+              <Select value={locationId} onChange={e => setLocationId(e.target.value)} aria-label="Location">
+                <option value="all">All locations</option>
+                {data.locations.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
+              </Select>
+            </div>
+            <div className="w-32">
+              <Select value={from} onChange={e => setFrom(e.target.value)} aria-label="From period">
+                {data.availablePeriods.map(p => <option key={p} value={p}>{p}</option>)}
+              </Select>
+            </div>
+            <span className="text-sm text-text-tertiary">to</span>
+            <div className="w-32">
+              <Select value={to} onChange={e => setTo(e.target.value)} aria-label="To period">
+                {data.availablePeriods.map(p => <option key={p} value={p}>{p}</option>)}
+              </Select>
             </div>
           </div>
         </div>
 
-        {/* Toggle button for summary sidebar on tablet */}
-        <button
-          onClick={() => setIsSummaryOpen(!isSummaryOpen)}
-          className="lg:hidden fixed bottom-6 right-6 z-40 w-12 h-12 bg-primary text-white rounded-full shadow-lg flex items-center justify-center hover:bg-primary-hover transition-colors"
-        >
-          <PanelRight size={18} />
-        </button>
-
-        {/* Summary sidebar overlay on tablet */}
-        {isSummaryOpen && (
-          <div
-            className="lg:hidden fixed inset-0 bg-black/30 z-40"
-            onClick={() => setIsSummaryOpen(false)}
+        {/* KPI row — single values belong in tiles, not one-bar charts */}
+        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+          <StatTile label="Revenue" value={formatCents(data.totals.revenueCents)} tone="neutral" hero />
+          <StatTile label="Expenses" value={formatCents(data.totals.expenseCents)} tone="neutral" hero />
+          <StatTile
+            label="Net"
+            value={formatCents(data.totals.netCents)}
+            tone={data.totals.netCents >= 0 ? 'positive' : 'negative'}
+            hero
           />
-        )}
-
-        {/* Right sidebar for summary */}
-        <div className={`
-          ${isSummaryOpen ? 'fixed inset-y-0 right-0 z-50 w-96' : 'hidden'}
-          lg:relative lg:block lg:w-xl lg:z-auto
-          bg-surface-secondary p-8 overflow-y-auto hide-scrollbar transition-all
-        `}>
-          <BudgetSummary
-            budget={budget}
-            onRefresh={refreshBudget}
-            onTransactionClick={handleTransactionClick}
-            selectedBudgetItem={selectedBudgetItem}
-            onCloseItemDetail={() => setSelectedBudgetItem(null)}
-            splitToEdit={splitToEdit}
-            onClearSplitToEdit={clearSplitToEdit}
-            refreshTrigger={refreshTrigger}
-          />
+          <StatTile label="Net Margin" value={`${margin.toFixed(1)}%`} sublabel="Net / revenue" hero />
         </div>
 
-        {/* Edit Transaction Modal (from line items) */}
-        {isEditModalOpen && (
-          <AddTransactionModal
-            isOpen={isEditModalOpen}
-            onClose={closeEditModal}
-            onAddTransaction={() => {}}
-            onEditTransaction={handleEditTransaction}
-            onDeleteTransaction={handleDeleteFromModal}
-            budgetItems={getAllBudgetItems()}
-            categories={getCategoryOptions()}
-            linkedAccounts={linkedAccounts}
-            transactionToEdit={transactionToEdit}
+        {/* Trends */}
+        <Card className="p-5">
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h2 className="font-display text-base text-text-primary">{MEASURE_LABEL[measure]} over time</h2>
+              <p className="text-xs text-text-secondary">By location, {periods.length} periods</p>
+            </div>
+            <div className="flex gap-1 rounded-lg border border-border p-0.5">
+              {(Object.keys(MEASURE_LABEL) as Measure[]).map(m => (
+                <button
+                  key={m}
+                  onClick={() => setMeasure(m)}
+                  className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
+                    measure === m ? 'bg-primary text-ink' : 'text-text-secondary hover:bg-surface-secondary'
+                  }`}
+                >
+                  {MEASURE_LABEL[m]}
+                </button>
+              ))}
+            </div>
+          </div>
+          <TrendChart
+            periods={periods}
+            series={series}
+            formatValue={formatCents}
+            formatAxis={formatCentsCompact}
           />
-        )}
+        </Card>
 
-        {/* Monthly Report Modal */}
-        <MonthlyReportModal
-          isOpen={isReportModalOpen}
-          onClose={() => setIsReportModalOpen(false)}
-          budget={budget}
-        />
+        <div className="grid gap-5 xl:grid-cols-2">
+          {/* Location comparison */}
+          <Card className="p-5">
+            <h2 className="font-display text-base text-text-primary">Location comparison</h2>
+            <p className="mb-4 text-xs text-text-secondary">Net for the selected range</p>
+            <BarRows
+              ariaLabel="Net by location"
+              rows={data.byLocation.map(l => ({
+                id: String(l.locationId),
+                label: l.name,
+                value: l.netCents,
+                color: entityColor(data.locations.findIndex(x => x.id === l.locationId)),
+                secondary: l.revenueCents > 0 ? `${((l.netCents / l.revenueCents) * 100).toFixed(1)}% margin` : undefined,
+              }))}
+              formatValue={formatCents}
+            />
+          </Card>
+
+          {/* Expense categories — magnitude, so one hue rather than categorical */}
+          <Card className="p-5">
+            <h2 className="font-display text-base text-text-primary">Expenses by category</h2>
+            <p className="mb-4 text-xs text-text-secondary">Largest first</p>
+            <BarRows
+              ariaLabel="Expenses by category"
+              rows={expenseCategories.map(c => ({
+                id: c.category,
+                label: c.category,
+                value: c.amountCents,
+                color: MAGNITUDE_FILL,
+              }))}
+              formatValue={formatCents}
+            />
+          </Card>
+        </div>
+
+        {/* Consolidated P&L — a table, because these are exact figures to read */}
+        <Card className="p-5">
+          <h2 className="font-display text-base text-text-primary">Consolidated P&amp;L</h2>
+          <p className="mb-4 text-xs text-text-secondary">{scopeLabel} · {data.range.from} to {data.range.to}</p>
+          <table className="w-full text-sm">
+            <tbody>
+              <tr className="border-b border-border">
+                <th colSpan={3} className="py-2 text-left text-xs font-semibold uppercase tracking-wide text-text-tertiary">Revenue</th>
+              </tr>
+              {revenueCategories.map(c => (
+                <tr key={c.category} className="border-b border-border/60">
+                  <td className="py-1.5 text-text-primary">{c.category}</td>
+                  <td className="py-1.5 text-right text-text-tertiary tabular-nums">{c.transactionCount.toLocaleString()}</td>
+                  <td className="py-1.5 text-right tabular-nums text-text-primary">{formatCents(c.amountCents)}</td>
+                </tr>
+              ))}
+              <tr className="border-b-2 border-border font-medium">
+                <td className="py-2 text-text-primary">Total revenue</td>
+                <td />
+                <td className="py-2 text-right tabular-nums text-text-primary">{formatCents(data.totals.revenueCents)}</td>
+              </tr>
+
+              <tr className="border-b border-border">
+                <th colSpan={3} className="pt-4 pb-2 text-left text-xs font-semibold uppercase tracking-wide text-text-tertiary">Expenses</th>
+              </tr>
+              {expenseCategories.map(c => (
+                <tr key={c.category} className="border-b border-border/60">
+                  <td className="py-1.5 text-text-primary">{c.category}</td>
+                  <td className="py-1.5 text-right text-text-tertiary tabular-nums">{c.transactionCount.toLocaleString()}</td>
+                  <td className="py-1.5 text-right tabular-nums text-text-primary">{formatCents(c.amountCents)}</td>
+                </tr>
+              ))}
+              <tr className="border-b-2 border-border font-medium">
+                <td className="py-2 text-text-primary">Total expenses</td>
+                <td />
+                <td className="py-2 text-right tabular-nums text-text-primary">{formatCents(data.totals.expenseCents)}</td>
+              </tr>
+
+              <tr className="text-base font-semibold">
+                <td className="py-3 text-text-primary">Net</td>
+                <td />
+                <td className={`py-3 text-right tabular-nums ${data.totals.netCents >= 0 ? 'text-success' : 'text-danger'}`}>
+                  {formatCents(data.totals.netCents)}
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </Card>
+
+        {/* Table view of the location data — the relief rule for palette slots
+            that sit below 3:1 against the surface. */}
+        <Card className="p-5">
+          <h2 className="font-display text-base text-text-primary">Location detail</h2>
+          <p className="mb-4 text-xs text-text-secondary">Same figures as the comparison chart, as a table</p>
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-border text-xs uppercase tracking-wide text-text-tertiary">
+                <th className="py-2 text-left font-semibold">Location</th>
+                <th className="py-2 text-right font-semibold">Revenue</th>
+                <th className="py-2 text-right font-semibold">Expenses</th>
+                <th className="py-2 text-right font-semibold">Net</th>
+                <th className="py-2 text-right font-semibold">Margin</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.byLocation.map(l => (
+                <tr key={l.locationId} className="border-b border-border/60">
+                  <td className="py-2 text-text-primary">
+                    <span className="inline-flex items-center gap-2">
+                      <span
+                        className="h-2.5 w-2.5 rounded-sm"
+                        style={{ background: entityColor(data.locations.findIndex(x => x.id === l.locationId)) }}
+                      />
+                      {l.name}
+                    </span>
+                  </td>
+                  <td className="py-2 text-right tabular-nums text-text-primary">{formatCents(l.revenueCents)}</td>
+                  <td className="py-2 text-right tabular-nums text-text-primary">{formatCents(l.expenseCents)}</td>
+                  <td className={`py-2 text-right tabular-nums ${l.netCents >= 0 ? 'text-success' : 'text-danger'}`}>
+                    {formatCents(l.netCents)}
+                  </td>
+                  <td className="py-2 text-right tabular-nums text-text-secondary">
+                    {l.revenueCents > 0 ? `${((l.netCents / l.revenueCents) * 100).toFixed(1)}%` : '—'}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </Card>
       </div>
     </DashboardLayout>
   );
